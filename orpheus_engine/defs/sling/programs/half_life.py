@@ -70,6 +70,7 @@ half_life_replication_config = {
                 "hackatimeUserId", "joinedProgramAt", "fraudFlagged",
             ],
         },
+        "public.user_day": None,
         "public.work_session": {
             "select": [
                 "-phase", "-title", "-content", "-hoursApproved",

@@ -15,10 +15,16 @@
 -- person who is active in several programs on a day is counted once. This also
 -- restores Horizons app-native users (2026-04-22+) to the total, which the prior
 -- program-native models left out.
+--
+-- A person counts here once some program that day counts them — for most programs
+-- any row, and for a program that keeps its own active-days table (see
+-- summer_unified_time_log's program_dau_source) only the days that table names.
+-- That is what a non-NULL dau_deduped weight means, so this stays the union of the
+-- per-program DAU sets and the stacked per-program weights still sum to it.
 
 SELECT
     (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
-    COUNT(DISTINCT user_email) AS dau
+    COUNT(DISTINCT user_email) FILTER (WHERE dau_deduped IS NOT NULL) AS dau
 FROM {{ ref('summer_unified_time_log') }}
 WHERE user_email IS NOT NULL
   -- Bucket and gate on the US Eastern day; exclude the in-progress Eastern day

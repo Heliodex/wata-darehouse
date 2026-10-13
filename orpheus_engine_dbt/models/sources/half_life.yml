@@ -24,6 +24,9 @@ sources:
       - name: user
         description: "Half Life user table."
         meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+      - name: user_day
+        description: "Half Life user_day table: DAUs tracking ≥15 minutes a day."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}
       - name: work_session
         description: "Half Life work_session table."
         meta: {dagster: {deps: [half_life_warehouse_mirror]}}

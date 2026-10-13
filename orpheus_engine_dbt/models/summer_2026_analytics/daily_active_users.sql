@@ -14,6 +14,16 @@
 -- DAU = distinct users who logged qualifying time/activity that day, using the
 -- program's own activity system. It is not a shipping/submission count.
 --
+-- "Qualifying" is the program's own answer. Most programs qualify on any row in
+-- summer_unified_time_log; a program listed in its program_dau_source keeps its own
+-- active-days table and qualifies only the days that table names (half_life:
+-- `user_day`, whose entries total at least 15 minutes in a day, journalled,
+-- Hackatime-tracked or Lapse-backed alike). So a program whose log carries zero-hour
+-- markers — attaching
+-- a timelapse, publishing a reel, and a hand-in posts a reel — stops counting
+-- somebody who turned up but logged nothing, while its hours series still records
+-- those markers.
+--
 --   dau             — distinct active users for that program/date. A person who
 --                     is active in N programs on a day counts 1 toward EACH of
 --                     those programs, so SUM(dau) across programs OVERCOUNTS the
@@ -120,7 +130,12 @@ WITH program_dau AS (
     SELECT
         program_name,
         (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
-        COUNT(DISTINCT user_email) AS dau,
+        -- A program-day's headcount is the users whose `dau` weight is non-NULL:
+        -- the time log answers "counts here" itself, from each program's own rule
+        -- (see its section 1b). A NULL-email row has a NULL weight too, so it stays
+        -- excluded as before. The group is kept even when nobody qualifies, so a
+        -- program-day reports 0 rather than dropping out of the series.
+        COUNT(DISTINCT user_email) FILTER (WHERE dau IS NOT NULL) AS dau,
         CASE
             WHEN BOOL_OR(logging_method = 'github_commit_days') THEN 'github_commit_days'
             WHEN BOOL_OR(logging_method = 'daily_project_activity') THEN 'daily_project_activity_time'
