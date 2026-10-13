@@ -1,7 +1,6 @@
 import dagster as dg
-from dagster_sling import SlingConnectionResource, SlingResource
 from dagster import EnvVar, Nothing
-
+from dagster_sling import SlingConnectionResource, SlingResource
 
 half_life_db_connection = SlingConnectionResource(
     name="HALF_LIFE_DB",
@@ -13,74 +12,129 @@ half_life_db_connection = SlingConnectionResource(
 half_life_replication_config = {
     "source": "HALF_LIFE_DB",
     "target": "WAREHOUSE_DB",
-
     "defaults": {
         "mode": "full-refresh",
         "object": "half_life.{stream_table}",
     },
-
     "streams": {
         "public.hackatime_link": {
             "select": [
-                "id", "themeProjectId", "hackatimeProject", "createdAt",
+                "id",
+                "themeProjectId",
+                "hackatimeProject",
+                "createdAt",
             ],
         },
         "public.post": {
             "select": [
-                "-caption", "-objectKey", "-thumbnailKey", "-contentType",
-                "-byteSize", "-durationSeconds", "-width", "-height",
-                "-viewCount", "-hiddenAt", "-hiddenById", "-hiddenReason",
-                "-weekNumber", "-commentCount", "-likeCount", "-pinnedAt",
+                "-caption",
+                "-objectKey",
+                "-thumbnailKey",
+                "-contentType",
+                "-byteSize",
+                "-durationSeconds",
+                "-width",
+                "-height",
+                "-viewCount",
+                "-hiddenAt",
+                "-hiddenById",
+                "-hiddenReason",
+                "-weekNumber",
+                "-commentCount",
+                "-likeCount",
+                "-pinnedAt",
                 "-checkpointKey",
             ],
         },
         "public.program_settings": {
             "select": [
-                "-submissionsOpen", "-submissionsCloseAt", "-shopOpen",
-                "-shopClosesAt", "-shopGraceDays", "-reviewClaimTtlMinutes",
-                "-airtableSyncEnabled", "-updatedById", "-repoSyncEnabled",
+                "-submissionsOpen",
+                "-submissionsCloseAt",
+                "-shopOpen",
+                "-shopClosesAt",
+                "-shopGraceDays",
+                "-reviewClaimTtlMinutes",
+                "-airtableSyncEnabled",
+                "-updatedById",
+                "-repoSyncEnabled",
             ],
         },
         "public.session_timelapse": {
             "select": [
-                "-objectKey", "-playbackUrl", "-thumbnailUrl",
-                "-runtimeSeconds", "-speedupFactor", "-externalId",
+                "-objectKey",
+                "-playbackUrl",
+                "-thumbnailUrl",
+                "-runtimeSeconds",
+                "-speedupFactor",
+                "-externalId",
             ],
         },
         "public.theme_project": {
             "select": [
-                "-theme", "-description", "-coverImageKey", "-artifactLinks",
-                "-designStatus", "-designReviewComments",
-                "-designReviewedAt", "-designReviewedById", "-buildStatus",
-                "-buildReviewComments", "-buildReviewedAt",
-                "-buildReviewedById", "-tier", "-grantUsd",
-                "-grantEmittedAt", "-approvedHours", "-approvedHoursAt",
-                "-submissionExtensionUntil", "-deletedById",
-                "-bomSavingsUsd", "-buildCoins", "-designApprovedHours",
-                "-designApprovedHoursAt", "-designBankedCoins",
-                "-designSpendableCoins", "-requestedTier",
-                "-starterProjectId", "-bomTaxShippingUsd", "-namedAt",
-                "-warmupPhase", "-repoSyncEnabled", "-repoSyncRepo",
-                "-repoSyncedAt", "-repoSyncError", "-repoSyncQueuedAt",
+                "-theme",
+                "-description",
+                "-coverImageKey",
+                "-artifactLinks",
+                "-designStatus",
+                "-designReviewComments",
+                "-designReviewedAt",
+                "-designReviewedById",
+                "-buildStatus",
+                "-buildReviewComments",
+                "-buildReviewedAt",
+                "-buildReviewedById",
+                "-tier",
+                "-grantUsd",
+                "-grantEmittedAt",
+                "-approvedHours",
+                "-approvedHoursAt",
+                "-submissionExtensionUntil",
+                "-deletedById",
+                "-bomSavingsUsd",
+                "-buildCoins",
+                "-designApprovedHours",
+                "-designApprovedHoursAt",
+                "-designBankedCoins",
+                "-designSpendableCoins",
+                "-requestedTier",
+                "-starterProjectId",
+                "-bomTaxShippingUsd",
+                "-namedAt",
+                "-warmupPhase",
+                "-repoSyncEnabled",
+                "-repoSyncRepo",
+                "-repoSyncedAt",
+                "-repoSyncError",
+                "-repoSyncQueuedAt",
             ],
         },
         "public.user": {
             "select": [
-                "id", "email", "createdAt", "updatedAt", "slackId",
-                "hackatimeUserId", "joinedProgramAt", "fraudFlagged",
+                "id",
+                "email",
+                "createdAt",
+                "updatedAt",
+                "slackId",
+                "hackatimeUserId",
+                "joinedProgramAt",
+                "fraudFlagged",
             ],
         },
         "public.user_day": None,
         "public.work_session": {
             "select": [
-                "-phase", "-title", "-content", "-hoursApproved",
-                "-weekNumber", "-reviewComments", "-reviewedAt",
+                "-phase",
+                "-title",
+                "-content",
+                "-hoursApproved",
+                "-weekNumber",
+                "-reviewComments",
+                "-reviewedAt",
                 "-reviewedById",
             ],
         },
     },
 }
-
 
 
 @dg.asset(
