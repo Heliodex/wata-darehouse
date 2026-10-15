@@ -120,7 +120,12 @@ WITH program_dau AS (
     SELECT
         program_name,
         (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
-        COUNT(DISTINCT user_email) AS dau,
+        -- A program-day's headcount is the users whose `dau` weight is non-NULL:
+        -- the time log answers "counts here" itself, from each program's own rule
+        -- (see its section 1b). A NULL-email row has a NULL weight too, so it stays
+        -- excluded as before. The group is kept even when nobody qualifies, so a
+        -- program-day reports 0 rather than dropping out of the series.
+        COUNT(DISTINCT user_email) FILTER (WHERE dau IS NOT NULL) AS dau,
         CASE
             WHEN BOOL_OR(logging_method = 'github_commit_days') THEN 'github_commit_days'
             WHEN BOOL_OR(logging_method = 'daily_project_activity') THEN 'daily_project_activity_time'

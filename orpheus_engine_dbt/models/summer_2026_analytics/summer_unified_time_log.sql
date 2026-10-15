@@ -269,6 +269,31 @@ WITH program_windows AS (
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
+-- ============================================================
+-- 1b. PROGRAMS WHOSE DAU IS THEIR APP'S OWN ACTIVE DAYS
+--
+-- A program listed here counts a person for a day only when its own table says
+-- that day was active — not merely because a row exists in this log.
+--
+-- Half Life is the case that forced it. Its log carries zero-hour markers on
+-- purpose (an attached timelapse, a published reel), and a hand-in posts a reel,
+-- so row-presence counted a maker who submitted without logging anything. The app
+-- already answers the question properly in its own code: an active day is one whose
+-- entries total at least 15 minutes, journalled, Hackatime-tracked or Lapse-backed
+-- alike, bucketed on the program timezone by the day the entry belongs to. That
+-- table is mirrored as `user_day` and carried into this log as
+-- `half_life_user_day`.
+--
+-- Unlisted programs keep the "any row counts" rule, which stays right for highway
+-- (commit days carry no durations at all) and fallout (its duration-less journals
+-- are its DAU markers).
+-- ============================================================
+program_dau_source AS (
+    SELECT * FROM (VALUES
+        ('half_life')
+    ) AS t(program_name)
+),
+
 bad_aliases AS (
     SELECT alias FROM (VALUES
         (''), ('other'), ('<<last_project>>'), ('projects'), ('.wakatime'), ('.vscode')
@@ -1637,6 +1662,44 @@ half_life_custom_hourly AS (
     GROUP BY 1, 2, 3, 4, 5
 ),
 
+-- Half Life's own active days, which is what its DAU means (see
+-- program_dau_source). One 0-hour row per (user, day) the app called active: enough
+-- to make the day count and to give the stacked weights a row to hang a day on when
+-- the hours path has none, without adding anything to the hours series.
+--
+-- `daily_user_activity` is the methodology token Horizons uses for its app-native
+-- daily table, so this reads as "app-native daily activity" on the dashboard rather
+-- than as a new kind of thing. The hours are zero because `user_day` carries none —
+-- the day's time, where there is any, arrives through the journal and Hackatime
+-- paths above.
+--
+-- Midnight on the app's own calendar day, as a timestamptz: the app buckets on the
+-- program timezone and every consumer here re-derives the Eastern day from the
+-- timestamp, so it has to be a real instant rather than a bare date. This assumes
+-- the program timezone is America/New_York (the app default); if it ever changes,
+-- derive the instant from program_settings instead.
+half_life_user_day AS (
+    SELECT
+        (d.day::timestamp AT TIME ZONE 'America/New_York') AS activity_hour,
+        'half_life'::text AS program_name,
+        u.user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        'daily_user_activity'::text AS logging_method,
+        0::numeric AS raw_hours_logged,
+        0::numeric AS credited_hours_logged,
+        1::smallint AS split_factor,
+        'none'::text AS overlap_type,
+        NULL::text[] AS overlapping_programs,
+        NULL::text AS hackatime_alias,
+        'half_life.user_day; app active day (>=15 min that day)'::text AS source_detail,
+        NULL::timestamptz AS claim_started_at
+    FROM {{ source('half_life', 'user_day') }} d
+    JOIN half_life_users_norm u ON u.id = d."userId"
+    WHERE NULLIF(BTRIM(d.day), '') IS NOT NULL
+      AND d.day >= '2026-09-14'
+),
+
 -- crescent links Hackatime by users.hackatime_id (NOT email: the Hack Club Auth
 -- email often differs from the Hackatime one), one alias per
 -- project_hackatime_links row. Each project belongs to the program week it was
@@ -2397,6 +2460,8 @@ combined AS (
     SELECT * FROM shrink_activity
     UNION ALL
     SELECT * FROM club_shop_activity
+    UNION ALL
+    SELECT * FROM half_life_user_day
 ),
 
 -- The rows that actually land in the table: every time-bearing row plus the
@@ -2440,22 +2505,41 @@ final_rows AS (
 -- activity-only / hour-less — e.g. highway commit days). NULL-email rows can't
 -- form a person, so both weights are NULL there (and excluded from DAU, matching
 -- daily_active_users*). Stored unrounded so the stacks reconcile exactly.
+--
+-- Both also answer "does this person count at all". A program that keeps its own
+-- active-days table (section 1b) counts a day only when that table names it, and
+-- gets a NULL weight otherwise; a person who counts in no program that day gets a
+-- NULL deduped weight too, so the deduped headcount stays the union of the
+-- per-program ones. daily_active_users* counts the same set by testing the weight
+-- for NULL, which is what keeps the stacked sums and the headcounts in step.
 -- ============================================================
 prog_user_day AS (
-    SELECT program_name, user_email, activity_date,
-        SUM(credited_hours_logged) AS prog_hours,
-        COUNT(*) AS prog_rows
-    FROM final_rows
-    WHERE user_email IS NOT NULL
+    SELECT f.program_name, f.user_email, f.activity_date,
+        SUM(f.credited_hours_logged) AS prog_hours,
+        COUNT(*) AS prog_rows,
+        -- Whether this program answers DAU from its own table (section 1b), and
+        -- whether it called this day active. The `daily_user_activity` token is
+        -- shared with horizons/shrink, but only a listed program's rows gate on
+        -- it (see the final CASE), so one BOOL_OR per question is enough and the
+        -- join stays one-to-one.
+        BOOL_OR(src.program_name IS NOT NULL) AS dau_from_source,
+        BOOL_OR(f.logging_method = 'daily_user_activity') AS has_app_active_day
+    FROM final_rows f
+    LEFT JOIN program_dau_source src ON src.program_name = f.program_name
+    WHERE f.user_email IS NOT NULL
     GROUP BY 1, 2, 3
 ),
 
+-- Rolled up from prog_user_day rather than final_rows: same rows, same totals
+-- (prog_hours sums to the day's credited hours, and one row per program is what
+-- day_program_count already counted), but it can see whether the person cleared
+-- any program's rule.
 user_day AS (
     SELECT user_email, activity_date,
-        SUM(credited_hours_logged) AS day_hours,
-        COUNT(DISTINCT program_name) AS day_program_count
-    FROM final_rows
-    WHERE user_email IS NOT NULL
+        SUM(prog_hours) AS day_hours,
+        COUNT(*) AS day_program_count,
+        BOOL_OR(NOT dau_from_source OR has_app_active_day) AS day_qualifies
+    FROM prog_user_day
     GROUP BY 1, 2
 )
 
@@ -2476,11 +2560,18 @@ SELECT
     c.claim_started_at,
     CASE
         WHEN c.user_email IS NULL THEN NULL
+        -- A program that answers DAU from its own table (section 1b) and did not
+        -- call this day active: the row is not a person-active signal.
+        WHEN pud.dau_from_source AND NOT pud.has_app_active_day THEN NULL
         WHEN pud.prog_hours > 0 THEN c.credited_hours_logged / pud.prog_hours
         ELSE 1.0 / pud.prog_rows
     END AS dau,
     CASE
         WHEN c.user_email IS NULL THEN NULL
+        -- Counted in the deduped headcount only if some program that day counts
+        -- them, so the deduped total is the union of the per-program sets and the
+        -- stacked weights still add up to it.
+        WHEN NOT ud.day_qualifies THEN NULL
         WHEN ud.day_hours > 0 THEN c.credited_hours_logged / ud.day_hours
         ELSE (1.0 / ud.day_program_count) / pud.prog_rows
     END AS dau_deduped
