@@ -243,6 +243,13 @@ WITH program_windows AS (
         -- the handoff so the two never overlap.
         ('phantom', TIMESTAMP WITH TIME ZONE '2026-09-17 00:00:00+00',
                    NULL::timestamptz),
+        -- Half Life's first program week opens 2026-10-05 (the app's
+        -- `program_settings.eventStartDate`), three weeks after this floor. The floor
+        -- is kept at the app's earliest pre-launch activity (the 2026-09-22 source
+        -- audit found 2 accounts and a published reel, no logged hours) so the
+        -- mirrored history is not silently truncated; a chart labelled "week 1" must
+        -- therefore start from 2026-10-05, not from this window. Anyone who moves the
+        -- app's `eventStartDate` must move this floor with it.
         ('half_life', TIMESTAMP WITH TIME ZONE '2026-09-14 00:00:00+00',
                    NULL::timestamptz),
         ('crescent', TIMESTAMP WITH TIME ZONE '2026-09-22 00:00:00+00',
@@ -1618,26 +1625,39 @@ half_life_ht_claims AS (
 ),
 -- Half Life's time entries, placed on the program day the work counts for.
 --
--- A session carries both the instant it was written (`createdAt`) and the day it
--- belongs to (`effectiveDate`, a YYYY-MM-DD stamped in the program timezone; null on
--- rows that predate the column). The app's streaks, weekly totals and both of its
--- admin charts bucket on the day the work counts for, so the warehouse does too; it
--- used to bucket on the writing instant, which put a backdated entry ("log yesterday's
--- work today") on a different day from the one it counted for and moved hours across
--- week boundaries at every week's edge.
+-- Participants cannot backdate an entry: the create route stamps `effectiveDate`
+-- from `now()` (`lib/submissions.ts` `stampSessionTiming`, called with a fresh
+-- `new Date()`) and the update schema has no such field. So for every row the app
+-- wrote, the day named here is the program-timezone date of `createdAt` and the
+-- instant reconstructed below is the row itself: placing rows on this day is
+-- hours-neutral for live data. It only decides the day for rows that name a different
+-- day than they were written — in practice imported rows, which the app's own streak
+-- and admin charts already attribute to `effectiveDate` too.
 --
--- The time of day is kept from the writing instant, so a backdated session still
--- sits at the hour it was filed and the hourly grain survives.
+-- The time of day is kept from the writing instant, so any row that does move keeps
+-- the hour it was filed and the hourly grain survives.
+--
+-- The app's history chart shows `hoursApproved ?? hoursClaimed`; this series is
+-- claimed hours, because an approval is a review outcome and re-pricing it would
+-- rewrite activity that did happen.
 --
 -- MANUAL is the only source that carries hours: a HACKATIME_TRACKED row is the link,
 -- and its minutes arrive through the Hackatime claim path, so counting them here
--- would add the same coding time twice.
+-- would add the same coding time twice. The app's active-day rule sums every
+-- source's `hoursClaimed`, but those rows carry 0 in practice, so the two sets agree
+-- (`hoursSource` is a client field, so a hand-rolled request could still differ).
+--
+-- `project_live` carries the app's soft-deletion rule: both `rebuildActiveDays` and
+-- the admin DAU chart count only entries on a project whose `deletedAt` is null. The
+-- hours are kept either way (ground rule 1 — project deletion is not fraud), so this
+-- only gates the day's active-day total below.
 half_life_sessions AS (
     SELECT
         user_email,
         project_name,
         code_url,
         program_day,
+        project_live,
         (program_day::timestamp + written_at) AT TIME ZONE 'America/New_York' AS activity_ts,
         hours
     FROM (
@@ -1645,12 +1665,14 @@ half_life_sessions AS (
             u.user_email,
             p.title::text AS project_name,
             NULLIF(BTRIM(p."githubRepo"), '')::text AS code_url,
-            -- `effectiveDate` is free text; the guard keeps a malformed value from
-            -- failing the cast rather than falling back to the written day.
+            -- The guard checks the shape only, so a well-shaped non-existent date
+            -- (e.g. '2026-02-31') would still fail the cast. The app writes this
+            -- column from its own clock, so a shape failure is the only case expected.
             CASE WHEN s."effectiveDate" ~ '^\d{4}-\d{2}-\d{2}$'
                  THEN s."effectiveDate"::date
                  ELSE (s."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')::date
             END AS program_day,
+            (p."deletedAt" IS NULL) AS project_live,
             (s."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')::time AS written_at,
             CASE WHEN s."hoursSource"::text = 'MANUAL'
                  THEN GREATEST(s."hoursClaimed"::numeric, 0)
@@ -1702,20 +1724,21 @@ half_life_custom_hourly AS (
 ),
 
 -- Half Life's active days, which is what its DAU means (see section 1b): one 0-hour
--- row per (person, program day) whose entries total at least 15 minutes. Zero hours
--- because the day's time, where there is any, arrives through the journal and
--- Hackatime paths above; this row only says "this person counts on this day", and it
--- gives the stacked weights a row to hang the day on when the hours path has none.
+-- row per (person, program day) whose entries on a live project total at least 15
+-- minutes. Zero hours because the day's time, where there is any, arrives through the
+-- journal and Hackatime paths above; this row only says "this person counts on this
+-- day", and it gives the stacked weights a row to hang the day on when the hours path
+-- has none.
 --
 -- Derived from the sessions rather than read off the app's own `user_day` table,
--- which is the same figure stored but not the same figure trusted. It is rebuilt only
--- when somebody writes, edits or deletes an entry, so it lags a project deletion and
--- reads nearly empty until `analytics:backfill` has run; and before Half Life deploy
--- 5f5f440 (2026-10-09) a page view wrote a day, so any stretch collected before that
--- still holds rows for everyone who merely visited the site, not for the people who
--- actually built. Either way the meter disagreed with the app's own admin DAU chart
--- (faeed2a), which derives from the sessions for exactly that reason; doing the same
--- here is what makes the two agree.
+-- which is the same figure stored but not the same figure trusted. It is stale in
+-- both directions: it lags a project deletion until that person next writes (rebuilds
+-- are per person, on write), and before Half Life commit 5f5f440 (2026-10-09) a page
+-- view wrote a day, so any stretch collected before that still holds rows for
+-- everyone who merely visited the site until `analytics:backfill` runs. Either way the
+-- meter disagreed with the app's own admin DAU chart (faeed2a), which derives from
+-- the sessions for exactly that reason; doing the same here is what makes the two
+-- agree.
 --
 -- The bar is on the day's total, and the 6dp rounding before the comparison is the
 -- app's (`roundHours`): ten 1.5-minute entries sum to 0.24999999999999997, which a
@@ -1748,7 +1771,8 @@ half_life_active_day AS (
         'half_life.work_session; app active day (>=15 min that day)'::text AS source_detail,
         NULL::timestamptz AS claim_started_at
     FROM (
-        SELECT user_email, program_day, SUM(hours) AS day_hours
+        SELECT user_email, program_day,
+               SUM(hours) FILTER (WHERE project_live) AS day_hours
         FROM half_life_sessions
         GROUP BY 1, 2
     ) d
@@ -2616,10 +2640,13 @@ SELECT
     CASE
         WHEN c.user_email IS NULL THEN NULL
         -- A program that answers DAU with its own per-day rule (section 1b) and
-        -- did not clear it for this day: the row is not a person-active signal.
-        -- Half Life's hackatime rows land here too on a day its journal rule did
-        -- not name, which keeps them out of DAU (the app counts journalled time);
-        -- their hours stay in the hours series.
+        -- did not clear it for this day: the row is not a person-active signal, so it
+        -- takes no share of THIS program's headcount. Half Life's hackatime rows land
+        -- here too on a day its journal rule did not name; their hours stay in the
+        -- hours series. `dau_deduped` below is a different question — it is NULL only
+        -- if NO program counted the person that day, so a row like this still takes
+        -- its hours-weighted share of the cross-program stack when they were active
+        -- elsewhere, which is the day's hours being apportioned, not a second DAU.
         WHEN pud.dau_from_source AND NOT pud.has_app_active_day THEN NULL
         WHEN pud.prog_hours > 0 THEN c.credited_hours_logged / pud.prog_hours
         ELSE 1.0 / pud.prog_rows
